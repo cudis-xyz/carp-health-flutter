@@ -172,6 +172,48 @@ class HealthDataWriter(
         }
     }
 
+    fun writeDataBatch(call: MethodCall, result: Result) {
+        val items = call.argument<List<Map<String, Any?>>>("data")!!
+        val records = mutableListOf<Record>()
+
+        for (item in items) {
+            val type = item["dataTypeKey"] as String
+            val startTime = (item["startTime"] as Number).toLong()
+            val endTime = (item["endTime"] as Number).toLong()
+            val value = (item["value"] as Number).toDouble()
+            val clientRecordId = item["clientRecordId"] as? String
+            val clientRecordVersion = (item["clientRecordVersion"] as? Number)?.toLong()
+            val recordingMethod = (item["recordingMethod"] as Number).toInt()
+            val deviceType = (item["deviceType"] as? Number)?.toInt()
+            val metadata = buildMetadata(
+                    recordingMethod = recordingMethod,
+                    clientRecordId = clientRecordId,
+                    clientRecordVersion = clientRecordVersion,
+                    deviceType = deviceType,
+            )
+            val record = createRecord(type, startTime, endTime, value, metadata)
+            if (record == null) {
+                result.success(false)
+                return
+            }
+            records.add(record)
+        }
+
+        scope.launch {
+            try {
+                healthConnectClient.insertRecords(records)
+                result.success(true)
+            } catch (e: Exception) {
+                Log.e("FLUTTER_HEALTH::ERROR", "Error writing batch: ${e.message}")
+                if (e.isHealthConnectRateLimited()) {
+                    result.error(HEALTH_CONNECT_RATE_LIMITED_ERROR, e.message, null)
+                } else {
+                    result.success(false)
+                }
+            }
+        }
+    }
+
         fun writeActivityIntensity(call: MethodCall, result: Result) {
                 val intensityType = call.argument<Int>("intensityType")!!
                 val startTime = Instant.ofEpochMilli(call.argument<Long>("startTime")!!)
@@ -320,6 +362,7 @@ class HealthDataWriter(
                                 exerciseType = workoutType,
                                 title = title,
                                 metadata = workoutMetadata,
+                                exerciseRoute = null,
                         ),
                 )
 
@@ -414,6 +457,7 @@ class HealthDataWriter(
                                 exerciseType = workoutType,
                                 title = title,
                                 metadata = workoutMetadata,
+                                exerciseRoute = null,
                         ),
                 )
 

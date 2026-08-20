@@ -55,12 +55,21 @@ class HealthDataOperations(
         }
 
         scope.launch {
-            result.success(
-                    healthConnectClient
-                            .permissionController
-                            .getGrantedPermissions()
-                            .containsAll(permList),
-            )
+            try {
+                result.success(
+                        healthConnectClient
+                                .permissionController
+                                .getGrantedPermissions()
+                                .containsAll(permList),
+                )
+            } catch (e: Exception) {
+                Log.e("FLUTTER_HEALTH::ERROR", "Error checking permissions: ${e.message}")
+                if (e.isHealthConnectRateLimited()) {
+                    result.error(HEALTH_CONNECT_RATE_LIMITED_ERROR, e.message, null)
+                } else {
+                    result.success(false)
+                }
+            }
         }
     }
 

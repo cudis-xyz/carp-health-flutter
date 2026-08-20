@@ -1,5 +1,28 @@
 part of '../health.dart';
 
+/// Input for [Health.writeHealthDataBatch].
+class HealthWriteSpec {
+  const HealthWriteSpec({
+    required this.value,
+    required this.type,
+    required this.startTime,
+    this.unit,
+    this.endTime,
+    this.recordingMethod = RecordingMethod.automatic,
+    this.clientRecordId,
+    this.clientRecordVersion,
+  });
+
+  final double value;
+  final HealthDataUnit? unit;
+  final HealthDataType type;
+  final DateTime startTime;
+  final DateTime? endTime;
+  final RecordingMethod recordingMethod;
+  final String? clientRecordId;
+  final double? clientRecordVersion;
+}
+
 /// Main class for the Plugin.
 ///
 /// Use this class to get an instance of the Health plugin, like this:
@@ -597,6 +620,98 @@ class Health {
     };
     bool? success = await _channel.invokeMethod('writeData', args);
     return success ?? false;
+  }
+
+  /// Write multiple health data records in one request.
+  ///
+  /// Returns true if successful, false otherwise.
+  ///
+  /// On Android this calls Health Connect `insertRecords` once. Google's
+  /// documentation requires at most 1000 records per write request; the
+  /// caller must chunk larger lists. See
+  /// <https://developer.android.com/health-and-fitness/health-connect/write-data>.
+  /// On other platforms this falls back to sequential [writeHealthData] calls.
+  ///
+  /// Health Connect rate-limit errors are thrown as [PlatformException] with
+  /// code `rate_limited`.
+  Future<bool> writeHealthDataBatch(List<HealthWriteSpec> items) async {
+    if (items.isEmpty) return true;
+    if (!Platform.isAndroid) {
+      var success = true;
+      for (final item in items) {
+        final itemSuccess = await writeHealthData(
+          value: item.value,
+          unit: item.unit,
+          type: item.type,
+          startTime: item.startTime,
+          clientRecordId: item.clientRecordId,
+          clientRecordVersion: item.clientRecordVersion,
+          endTime: item.endTime,
+          recordingMethod: item.recordingMethod,
+        );
+        success = itemSuccess && success;
+      }
+      return success;
+    }
+
+    await _checkIfHealthConnectAvailableOnAndroid();
+    final data = <Map<String, dynamic>>[];
+    for (final item in items) {
+      data.add(await _writeHealthDataBatchArgs(item));
+    }
+
+    bool? success = await _channel.invokeMethod('writeDataBatch', {
+      'data': data,
+    });
+    return success ?? false;
+  }
+
+  Future<Map<String, dynamic>> _writeHealthDataBatchArgs(HealthWriteSpec item) async {
+    await _checkIfDataTypeAvailableOnDevice(item.type);
+    if (Platform.isIOS && [RecordingMethod.active, RecordingMethod.unknown].contains(item.recordingMethod)) {
+      throw ArgumentError("recordingMethod must be manual or automatic on iOS");
+    }
+
+    if (item.type == HealthDataType.WORKOUT) {
+      throw ArgumentError("Adding workouts should be done using the writeWorkoutData method.");
+    }
+    if (item.type == HealthDataType.ACTIVITY_INTENSITY) {
+      throw ArgumentError("Adding activity intensity data should be done using the writeActivityIntensity method.");
+    }
+    if (!isDataTypeAvailable(item.type)) {
+      throw HealthException(item.type, 'Not available on platform $platformType');
+    }
+    final endTime = item.endTime ?? item.startTime;
+    if (item.startTime.isAfter(endTime)) {
+      throw ArgumentError("startTime must be equal or earlier than endTime");
+    }
+
+    final unit = item.unit ?? dataTypeToUnit[item.type]!;
+    var value = item.value;
+    if (item.type == HealthDataType.SLEEP_ASLEEP ||
+        item.type == HealthDataType.SLEEP_AWAKE ||
+        item.type == HealthDataType.SLEEP_IN_BED ||
+        item.type == HealthDataType.SLEEP_DEEP ||
+        item.type == HealthDataType.SLEEP_REM ||
+        item.type == HealthDataType.SLEEP_LIGHT ||
+        item.type == HealthDataType.HEADACHE_NOT_PRESENT ||
+        item.type == HealthDataType.HEADACHE_MILD ||
+        item.type == HealthDataType.HEADACHE_MODERATE ||
+        item.type == HealthDataType.HEADACHE_SEVERE ||
+        item.type == HealthDataType.HEADACHE_UNSPECIFIED) {
+      value = _alignValue(item.type).toDouble();
+    }
+
+    return {
+      'value': value,
+      'dataTypeKey': item.type.name,
+      'dataUnitKey': unit.name,
+      'startTime': item.startTime.millisecondsSinceEpoch,
+      'endTime': endTime.millisecondsSinceEpoch,
+      'recordingMethod': item.recordingMethod.toInt(),
+      'clientRecordId': item.clientRecordId,
+      'clientRecordVersion': item.clientRecordVersion,
+    };
   }
 
   /// Write health data and return UUID on success.
