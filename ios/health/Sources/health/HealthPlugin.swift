@@ -70,6 +70,14 @@ public class HealthPlugin: NSObject, FlutterPlugin {
         case "getData":
             healthDataReader.getData(call: call, result: result)
 
+        case "getAnchoredHealthRecords":
+            if #available(iOS 15.4, *) {
+                healthDataReader.getAnchoredHealthRecords(call: call, result: result)
+            } else {
+                result(FlutterError(code: "unsupported_platform",
+                                    message: "Anchored record reads require iOS 15.4 or later", details: nil))
+            }
+
         case "getDataByUUID":
             healthDataReader.getDataByUUID(call: call, result: result)
 

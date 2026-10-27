@@ -1,3 +1,8 @@
+## Unreleased
+
+* Add opt-in strict single-type Health Connect token/snapshot/changes reads and iOS 15.4+ anchored record reads.
+* Preserve complete native HR series and sleep stages in read-only record containers, with explicit pagination and propagated native/parse errors. Existing point models, reads and writes are unchanged.
+
 ## 13.3.2
 
 * Write data now returns UUID of records - PR [#448](https://github.com/carp-dk/carp-health-flutter/pull/448)

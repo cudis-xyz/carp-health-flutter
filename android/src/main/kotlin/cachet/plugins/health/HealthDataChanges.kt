@@ -24,6 +24,55 @@ class HealthDataChanges(
     private val context: Context,
     private val dataConverter: HealthDataConverter
 ) {
+    internal fun isUsingScope(scope: CoroutineScope): Boolean = this.scope === scope
+
+    /** Strict, single-type token creation. Does not alter the legacy API. */
+    fun getHealthRecordChangesToken(call: MethodCall, result: Result) {
+        launchHealthRecordRead(scope, context, call, result) { stage ->
+            val (_, recordType) = healthRecordReadType(call)
+            stage("token")
+            healthConnectClient.getChangesToken(ChangesTokenRequest(recordTypes = setOf(recordType)))
+                .also { check(it.isNotEmpty()) { "Provider returned an empty changes token" } }
+        }
+    }
+
+    /** One changes page, retaining full series/stages and ID-only deletions. */
+    fun getHealthRecordChanges(call: MethodCall, result: Result) {
+        launchHealthRecordRead(scope, context, call, result) { stage ->
+            val (type, _) = healthRecordReadType(call)
+            val token = (call.arguments as? Map<*, *>)?.get("changesToken")
+            require(token is String && token.isNotEmpty()) { "Missing changesToken" }
+            stage("changes")
+            val response = healthConnectClient.getChanges(token)
+            check(response.changesTokenExpired || response.nextChangesToken.isNotEmpty()) {
+                "Provider returned an empty next token"
+            }
+            check(response.changesTokenExpired || !response.hasMore || response.nextChangesToken != token) {
+                "Provider changes cursor did not advance"
+            }
+            stage("conversion")
+            val changes = response.changes.map { change ->
+                when (change) {
+                    is UpsertionChange -> mapOf(
+                        "type" to "upsert", "nativeType" to type,
+                        "recordId" to change.record.metadata.id,
+                        "record" to dataConverter.convertRecordEnvelope(change.record, type)
+                    )
+                    is DeletionChange -> {
+                        check(change.recordId.isNotEmpty()) { "Provider returned an empty deletion ID" }
+                        mapOf("type" to "delete", "nativeType" to type, "recordId" to change.recordId)
+                    }
+                    else -> error("Unknown native change operation")
+                }
+            }
+            mapOf(
+                "nativeType" to type, "changes" to changes,
+                "nextChangesToken" to response.nextChangesToken,
+                "hasMore" to response.hasMore, "changesTokenExpired" to response.changesTokenExpired
+            )
+        }
+    }
+
     /**
      * Creates a changes token for the requested record types.
      *

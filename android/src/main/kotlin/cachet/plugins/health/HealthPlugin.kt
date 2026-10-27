@@ -160,6 +160,12 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
             "getTotalStepsInInterval" -> dataReader.getTotalStepsInInterval(call, result)
             "getChangesToken" -> dataChanges.getChangesToken(call, result)
             "getChanges" -> dataChanges.getChanges(call, result)
+            "getHealthRecordChangesToken" ->
+                    withHealthRecordRead(call, result) { dataChanges.getHealthRecordChangesToken(call, result) }
+            "getHealthRecordSnapshot" ->
+                    withHealthRecordRead(call, result) { dataReader.getHealthRecordSnapshot(call, result) }
+            "getHealthRecordChanges" ->
+                    withHealthRecordRead(call, result) { dataChanges.getHealthRecordChanges(call, result) }
 
             // Writing data
             "writeData" -> dataWriter.writeData(call, result)
@@ -227,6 +233,30 @@ class HealthPlugin(private var channel: MethodChannel? = null) :
         }
         activity = null
         healthConnectRequestPermissionsLauncher = null
+    }
+
+    private fun withHealthRecordRead(call: MethodCall, result: Result, read: () -> Unit) {
+        // Capture this call's Result; never route strict reads through shared mResult.
+        try {
+            val currentContext = context
+            if (currentContext == null || !this::scope.isInitialized || !scope.isActive) {
+                result.error("cancelled", "Health plugin is detached", null)
+                return
+            }
+            checkAvailability()
+            if (!healthConnectAvailable) {
+                result.error("health_connect_unavailable", "Health Connect is unavailable",
+                    mapOf("sdkStatus" to healthConnectStatus))
+                return
+            }
+            if (!this::dataChanges.isInitialized || !dataChanges.isUsingScope(scope)) {
+                healthConnectClient = HealthConnectClient.getOrCreate(currentContext)
+                initializeHelpers()
+            }
+            read()
+        } catch (error: Exception) {
+            healthRecordReadError(result, error, call.method)
+        }
     }
 
     /**

@@ -298,6 +298,62 @@ flutter: Health Plugin Error:
 flutter:  PlatformException(FlutterHealth, Results are null, Optional(Error Domain=com.apple.healthkit Code=6 "Protected health data is inaccessible" UserInfo={NSLocalizedDescription=Protected health data is inaccessible}))
 ```
 
+### Strict paged record reads
+
+These opt-in APIs leave existing reads and writes unchanged. They do not request
+permissions, persist positions, filter sources, or upload data.
+
+| Platform | Method | Purpose |
+| --- | --- | --- |
+| Android | `getHealthRecordChangesToken(type: ...)` | Create a token bound to one native record type |
+| Android | `getHealthRecordSnapshot(type: ..., startTime: ..., endTime: ..., pageToken: ..., pageSize: ...)` | Read one snapshot page; null nextPageToken means exhausted |
+| Android | `getHealthRecordChanges(type: ..., changesToken: ...)` | Read one changes page, including ID-only deletions |
+| iOS 15.4+ | `getAnchoredHealthRecords(type: ..., startTime: ..., anchor: ..., limit: ...)` | Read one anchored page, including deletions |
+
+Supported representative types are STEPS, HEART_RATE, RESTING_HEART_RATE and
+BLOOD_OXYGEN on both platforms; HEART_RATE_VARIABILITY_RMSSD and SLEEP_SESSION
+on Android; HEART_RATE_VARIABILITY_SDNN, BODY_TEMPERATURE and SLEEP_ASLEEP on iOS.
+The sleep representative returns all supported native sleep categories/stages.
+`HealthDataRecord` retains parent dates, the real ID and every original
+`HealthDataPoint`, including shared UUIDs in series. Point units, values and
+recording-method defaults retain the existing conventions. Grouping is a read
+container and does not define a persistence identity for child points.
+
+For Health Connect, persist the initial changes token before the snapshot, use
+fixed snapshot bounds, then consume changes from that token. Keep each token
+bound to its native type and query scope. Check `changesTokenExpired` before
+using a response: an expired response can have an empty `nextChangesToken` and
+requires caller-managed reinitialization. Only a non-expired position can be
+committed. For HealthKit, reuse the same type and fixed startTime with each
+opaque secure-archive anchor. Read until hasMore is false; a nonempty HealthKit
+page requires another query to confirm exhaustion. HealthKit read visibility
+cannot be inferred from an empty page.
+
+Await durable point delivery before persisting the next position. Failed
+delivery/recovery may reread records; these APIs do not promise exactly-once
+delivery. PlatformException retains an observable failure code and available
+native diagnostic details; parsing failures throw FormatException instead of
+returning empty success. Unsupported platform/type and invalid Dart arguments
+fail explicitly. Do not log complete tokens, anchors or health payloads.
+Strict Android errors include `nativeErrorCode` when an Android 14+ platform
+cause retains its public error code; the field is null when unavailable.
+
+The read-only device comparison is in
+`example/integration_test/health_record_reads_test.dart`. Prepare READ permissions
+and controlled data on a test device before running it. Empty datasets provide
+smoke coverage only; multi-point HR, sleep stages, updates/deletions and permission
+recovery require corresponding fixtures. MethodChannel tests do not run native code.
+
+`example/integration_test/health_record_fixture_test.dart` is a separate controlled
+Android fixture test. It uses the existing writer and removes its fixtures in
+finally. It is skipped unless explicitly passed
+`--dart-define=HEALTH_RECORD_FIXTURE_DEVICE=isolated-emulator`; run it only in an
+isolated emulator store with the required READ/WRITE permissions. It checks real
+snapshot pagination, complete upserts, updates of the same ID and ID-only deletion.
+No production writer or upload path is added. The read-only test supports
+`--dart-define=HEALTH_RECORD_EXPECT_DENIED=true` for an ungranted permission fixture;
+that mode skips successful-read comparisons and checks observable native failures.
+
 ### Fetch single health data by UUID
 
 In order to retrieve a single record, it is required to provide `String uuid` and `HealthDataType type`.

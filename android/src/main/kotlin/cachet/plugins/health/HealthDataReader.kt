@@ -34,6 +34,37 @@ class HealthDataReader(
 ) {
     private val recordingFilter = HealthRecordingFilter()
 
+    /** One snapshot page, using exactly the caller's fixed query bounds. */
+    fun getHealthRecordSnapshot(call: MethodCall, result: Result) {
+        launchHealthRecordRead(scope, context, call, result) { stage ->
+            val (type, recordType) = healthRecordReadType(call)
+            val args = call.arguments as? Map<*, *>
+            val start = args?.get("startTime")
+            val end = args?.get("endTime")
+            val pageSize = args?.get("pageSize")
+            val token = args?.get("pageToken")
+            require((start is Long || start is Int) && (end is Long || end is Int)) { "Invalid query dates" }
+            require(pageSize is Int && pageSize in 1..5000) { "pageSize must be 1..5000" }
+            require(token == null || (token is String && token.isNotEmpty())) { "Invalid pageToken" }
+            val from = Instant.ofEpochMilli((start as Number).toLong())
+            val to = Instant.ofEpochMilli((end as Number).toLong())
+            require(from < to) { "startTime must precede endTime" }
+            stage("snapshot")
+            val response = healthConnectClient.readRecords(ReadRecordsRequest(
+                recordType = recordType, timeRangeFilter = TimeRangeFilter.between(from, to),
+                pageSize = pageSize, pageToken = token as String?
+            ))
+            val next = response.pageToken?.takeIf { it.isNotEmpty() }
+            check(next == null || next != token) { "Provider snapshot cursor did not advance" }
+            stage("conversion")
+            mapOf(
+                "nativeType" to type,
+                "records" to response.records.map { dataConverter.convertRecordEnvelope(it, type) },
+                "nextPageToken" to next
+            )
+        }
+    }
+
     /**
      * Retrieves all health data points of a specified type within a given time range.
      * Handles pagination for large datasets and applies recording method filtering.

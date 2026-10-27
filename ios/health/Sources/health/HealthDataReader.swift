@@ -181,22 +181,7 @@ class HealthDataReader {
 
             if let quantitySamples = samples as? [HKQuantitySample] {
                 let dictionaries = quantitySamples.map { sample -> NSDictionary in
-                    return [
-                        "uuid": "\(sample.uuid)",
-                        "value": sample.quantity.doubleValue(
-                            for: unit ?? HKUnit.internationalUnit()
-                        ),
-                        "date_from": Int(sample.startDate.timeIntervalSince1970 * 1000),
-                        "date_to": Int(sample.endDate.timeIntervalSince1970 * 1000),
-                        "source_id": sample.sourceRevision.source.bundleIdentifier,
-                        "source_name": sample.sourceRevision.source.name,
-                        "recording_method":
-                            (sample.metadata?[HKMetadataKeyWasUserEntered] as? Bool == true)
-                            ? HealthConstants.RecordingMethod.manual.rawValue
-                            : HealthConstants.RecordingMethod.automatic.rawValue,
-                        "dataUnitKey": unit?.unitString,
-                        "metadata": HealthUtilities.sanitizeMetadata(sample.metadata),
-                    ]
+                    return self.quantitySampleToDataPoint(sample, unit: unit)
                 }
                 DispatchQueue.main.async {
                     result(dictionaries)
@@ -231,19 +216,7 @@ class HealthDataReader {
                 }
 
                 let categories = categorySamples.map { sample -> NSDictionary in
-                    return [
-                        "uuid": "\(sample.uuid)",
-                        "value": sample.value,
-                        "date_from": Int(sample.startDate.timeIntervalSince1970 * 1000),
-                        "date_to": Int(sample.endDate.timeIntervalSince1970 * 1000),
-                        "source_id": sample.sourceRevision.source.bundleIdentifier,
-                        "source_name": sample.sourceRevision.source.name,
-                        "recording_method":
-                            (sample.metadata?[HKMetadataKeyWasUserEntered] as? Bool == true)
-                            ? HealthConstants.RecordingMethod.manual.rawValue
-                            : HealthConstants.RecordingMethod.automatic.rawValue,
-                        "metadata": HealthUtilities.sanitizeMetadata(sample.metadata),
-                    ]
+                    return self.categorySampleToDataPoint(sample)
                 }
                 DispatchQueue.main.async {
                     result(categories)

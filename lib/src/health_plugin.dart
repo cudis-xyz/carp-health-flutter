@@ -1485,6 +1485,119 @@ class Health {
     }
   }
 
+  /// Creates a strict, single-native-type Health Connect token (Android only).
+  ///
+  /// Persist it before reading a snapshot. Errors are never converted to null.
+  Future<String> getHealthRecordChangesToken({required HealthDataType type}) async {
+    _checkRecordReadType(type, HealthPlatformType.googleHealthConnect);
+    final token = await _channel.invokeMethod<Object?>('getHealthRecordChangesToken', {'dataTypeKey': type.name});
+    return _recordString(token, 'changesToken');
+  }
+
+  /// Reads exactly one Health Connect snapshot page (Android only).
+  ///
+  /// Reuse the same bounds/type with [pageToken]. No source filtering is applied.
+  Future<HealthRecordSnapshotResponse> getHealthRecordSnapshot({
+    required HealthDataType type,
+    required DateTime startTime,
+    required DateTime endTime,
+    String? pageToken,
+    int pageSize = 1000,
+  }) async {
+    _checkRecordReadType(type, HealthPlatformType.googleHealthConnect);
+    if (!startTime.isBefore(endTime)) throw ArgumentError('startTime must precede endTime');
+    if (pageSize <= 0 || pageSize > 5000) throw ArgumentError.value(pageSize, 'pageSize', 'Must be 1..5000');
+    if (pageToken != null) _recordArgumentToken(pageToken, 'pageToken');
+    final payload = await _channel.invokeMethod<Object?>('getHealthRecordSnapshot', {
+      'dataTypeKey': type.name,
+      'dataUnitKey': dataTypeToUnit[type]!.name,
+      'startTime': startTime.millisecondsSinceEpoch,
+      'endTime': endTime.millisecondsSinceEpoch,
+      'pageToken': pageToken,
+      'pageSize': pageSize,
+    });
+    HealthRecordSnapshotResponse parse(Object? value) =>
+        HealthRecordSnapshotResponse.fromMethodChannel(value, type: type);
+    final response = _recordPayloadIsLarge(payload) ? await compute(parse, payload) : parse(payload);
+    if (pageToken != null && response.nextPageToken == pageToken) {
+      throw const FormatException('Snapshot cursor did not advance');
+    }
+    return response;
+  }
+
+  /// Reads exactly one Health Connect changes page (Android only).
+  ///
+  /// Tokens must remain bound to the type used for creation. Deletes have IDs
+  /// only; the provider cannot verify their type from the token string alone.
+  Future<HealthRecordChangesResponse> getHealthRecordChanges({
+    required HealthDataType type,
+    required String changesToken,
+  }) async {
+    _checkRecordReadType(type, HealthPlatformType.googleHealthConnect);
+    _recordArgumentToken(changesToken, 'changesToken');
+    final payload = await _channel.invokeMethod<Object?>('getHealthRecordChanges', {
+      'dataTypeKey': type.name,
+      'dataUnitKey': dataTypeToUnit[type]!.name,
+      'changesToken': changesToken,
+    });
+    HealthRecordChangesResponse parse(Object? value) =>
+        HealthRecordChangesResponse.fromMethodChannel(value, type: type);
+    final response = _recordPayloadIsLarge(payload) ? await compute(parse, payload) : parse(payload);
+    if (!response.changesTokenExpired && response.hasMore && response.nextChangesToken == changesToken) {
+      throw const FormatException('Changes cursor did not advance');
+    }
+    return response;
+  }
+
+  /// Reads one anchored HealthKit page (iOS 15.4+ only).
+  ///
+  /// Keep a fixed [startTime] and type for the lifetime of [anchor]. The initial
+  /// anchor is null. No end date prevents later samples from entering the query.
+  /// Sleep uses SLEEP_ASLEEP and returns all supported sleep categories.
+  /// Read through an empty page to confirm exhaustion.
+  Future<HealthAnchoredRecordsResponse> getAnchoredHealthRecords({
+    required HealthDataType type,
+    required DateTime startTime,
+    String? anchor,
+    int limit = 1000,
+  }) async {
+    _checkRecordReadType(type, HealthPlatformType.appleHealth);
+    if (limit <= 0) throw ArgumentError.value(limit, 'limit', 'Must be positive');
+    if (anchor != null) _recordArgumentToken(anchor, 'anchor');
+    final payload = await _channel.invokeMethod<Object?>('getAnchoredHealthRecords', {
+      'dataTypeKey': type.name,
+      'dataUnitKey': dataTypeToUnit[type]!.name,
+      'startTime': startTime.millisecondsSinceEpoch,
+      'anchor': anchor,
+      'limit': limit,
+    });
+    HealthAnchoredRecordsResponse parse(Object? value) =>
+        HealthAnchoredRecordsResponse.fromMethodChannel(value, type: type);
+    final response = _recordPayloadIsLarge(payload) ? await compute(parse, payload) : parse(payload);
+    if (response.hasMore && response.nextAnchor == anchor) {
+      throw const FormatException('HealthKit anchor did not advance');
+    }
+    return response;
+  }
+
+  void _checkRecordReadType(HealthDataType type, HealthPlatformType platform) {
+    if (platformType != platform) throw UnsupportedError('Record read is not available on $platformType');
+    final supported =
+        _recordScalarTypes.contains(type) ||
+        (platform == HealthPlatformType.appleHealth
+            ? const {
+                HealthDataType.BODY_TEMPERATURE,
+                HealthDataType.HEART_RATE_VARIABILITY_SDNN,
+                HealthDataType.SLEEP_ASLEEP,
+              }.contains(type)
+            : const {HealthDataType.HEART_RATE_VARIABILITY_RMSSD, HealthDataType.SLEEP_SESSION}.contains(type));
+    if (!supported) throw UnsupportedError('Record read does not support ${type.name}');
+  }
+
+  void _recordArgumentToken(String token, String name) {
+    if (token.isEmpty) throw ArgumentError.value(token, name, 'Must not be empty');
+  }
+
   /// Prepares an interval query, i.e. checks if the types are available, etc.
   Future<List<HealthDataPoint>> _prepareQuery(
     DateTime startTime,
